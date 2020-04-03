@@ -68,6 +68,8 @@
     <Compile Include="SafeHandle.cs" />
     <Compile Include="Win32\AdvApi32.cs" />
     <Compile Include="Win32\Enums\PROCESS_CREATION_FLAGS.cs" />
+    <Compile Include="Win32\Enums\SECURITY_IMPERSONATION_LEVEL.cs" />
+    <Compile Include="Win32\Enums\TOKEN_TYPE.cs" />
     <Compile Include="Win32\Enums\WTS_CONNECTSTATE_CLASS.cs" />
     <Compile Include="Win32\Kernal32.cs" />
     <Compile Include="Win32\Structs\PROCESS_INFORMATION.cs" />

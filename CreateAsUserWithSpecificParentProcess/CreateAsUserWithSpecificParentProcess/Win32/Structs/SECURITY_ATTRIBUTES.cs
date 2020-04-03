@@ -6,8 +6,8 @@ namespace CreateAsUserWithSpecificParentProcess.Win32.Structs
     [StructLayout(LayoutKind.Sequential)]
     public struct SECURITY_ATTRIBUTES
     {
-        public int nLength;
+        public int Length;
         public IntPtr lpSecurityDescriptor;
-        public int bInheritHandle;
+        public bool bInheritHandle;
     }
 }

@@ -14,7 +14,7 @@ namespace CreateAsUserWithSpecificParentProcess
 {
     public class CreateAsUserWithSpecificParentProcess
     {
-        public static int CreateProcess(string userName, string fileName, string args, int parentProcessId,bool waitingExitCode = false)
+        public static int CreateProcess(string userName, string fileName, string args, int parentProcessId, bool waitingExitCode = false, bool elevated = false)
         {
             int result = -1;
             if (GetExistSessions(new SafeHandle(IntPtr.Zero, false), out var sessions))
@@ -42,7 +42,7 @@ namespace CreateAsUserWithSpecificParentProcess
                             {
                                 try
                                 {
-                                    result = CreateProcess(fileName, args, parentProcessId, userHandle.DangerousGetHandle(), waitingExitCode);
+                                    result = CreateProcess(fileName, args, info.SessionId, parentProcessId, userHandle.DangerousGetHandle(), waitingExitCode, elevated);
                                     break;
                                 }
                                 finally
@@ -96,7 +96,7 @@ namespace CreateAsUserWithSpecificParentProcess
             }
         }
 
-        private static int CreateProcess(string fileName, string args,int parentProcessId, IntPtr hToken,bool waitingExitCode)
+        private static int CreateProcess(string fileName, string args, uint sessionId, int parentProcessId, IntPtr hToken, bool waitingExitCode, bool elevated)
         {
             var exitCode = 0;
 
@@ -113,7 +113,7 @@ namespace CreateAsUserWithSpecificParentProcess
                 ExitWithWin32Error();
             }
 
-            var dwCreationFlags = (uint) (PROCESS_CREATION_FLAGS.NORMAL_PRIORITY_CLASS |
+            var dwCreationFlags = (uint)(PROCESS_CREATION_FLAGS.NORMAL_PRIORITY_CLASS |
                                            PROCESS_CREATION_FLAGS.CREATE_UNICODE_ENVIRONMENT |
                                            PROCESS_CREATION_FLAGS.EXTENDED_STARTUPINFO_PRESENT);
 
@@ -121,7 +121,25 @@ namespace CreateAsUserWithSpecificParentProcess
             sInfoEx.StartupInfo.cb = Marshal.SizeOf(sInfoEx);
 
             var lpValue = IntPtr.Zero;
-            if (parentProcessId != 0)
+
+            //will run as System
+            if (elevated)
+            {
+                var hPToken = GetOpenedWinLogonToken(sessionId, out var logonPid);
+                SECURITY_ATTRIBUTES sa = new SECURITY_ATTRIBUTES();
+                sa.Length = Marshal.SizeOf(sa);
+
+                Kernal32.CloseHandle(hToken);
+
+                if (!AdvApi32.DuplicateTokenEx(hPToken, MAXIMUM_ALLOWED, ref sa,
+                    (int)SECURITY_IMPERSONATION_LEVEL.SecurityIdentification,
+                    (int)TOKEN_TYPE.TokenPrimary, ref hToken))
+                {
+                    ExitWithWin32Error();
+                }
+                Kernal32.CloseHandle(hPToken);
+            }
+            else if (parentProcessId != 0)
             {
                 var lpSize = IntPtr.Zero;
                 var initSuccess = Kernal32.InitializeProcThreadAttributeList(IntPtr.Zero, 1, 0, ref lpSize);
@@ -161,7 +179,7 @@ namespace CreateAsUserWithSpecificParentProcess
 
             var processCreateResult = AdvApi32.CreateProcessAsUser(hToken, fileName, args, IntPtr.Zero, IntPtr.Zero,
                 false, dwCreationFlags, environmentPtr, Path.GetDirectoryName(fileName), ref sInfoEx,
-                out PROCESS_INFORMATION tProcessInfo);
+                out var tProcessInfo);
 
             if (!processCreateResult)
             {
@@ -201,8 +219,30 @@ namespace CreateAsUserWithSpecificParentProcess
 
         private static void ExitWithWin32Error()
         {
-            int lastError = Marshal.GetLastWin32Error();
+            var lastError = Marshal.GetLastWin32Error();
             throw new Exception($"Error Code:{lastError}");
         }
+
+        private static IntPtr GetOpenedWinLogonToken(uint sessionId, out uint pid)
+        {
+            const int TOKEN_DUPLICATE = 0x0002;
+            uint winLogonPid = 0;
+            var processes = Process.GetProcessesByName("winlogon");
+            foreach (var p in processes)
+            {
+                if (p.SessionId == sessionId)
+                {
+                    winLogonPid = (uint)p.Id;
+                }
+            }
+
+            var hPToken = IntPtr.Zero;
+            var hProcess = Kernal32.OpenProcess(MAXIMUM_ALLOWED, false, winLogonPid);
+            AdvApi32.OpenProcessToken(hProcess, TOKEN_DUPLICATE, ref hPToken);
+            pid = winLogonPid;
+            return hPToken;
+        }
+
+        private const uint MAXIMUM_ALLOWED = 0x2000000;
     }
 }
