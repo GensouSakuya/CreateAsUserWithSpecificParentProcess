@@ -122,15 +122,12 @@ namespace CreateAsUserWithSpecificParentProcess
                 SECURITY_ATTRIBUTES sa = new SECURITY_ATTRIBUTES();
                 sa.Length = Marshal.SizeOf(sa);
 
-                Kernal32.CloseHandle(hToken);
-
                 if (!AdvApi32.DuplicateTokenEx(hPToken, MAXIMUM_ALLOWED, ref sa,
                     (int)SECURITY_IMPERSONATION_LEVEL.SecurityIdentification,
                     (int)TOKEN_TYPE.TokenPrimary, ref hToken))
                 {
                     ExitWithWin32Error();
                 }
-                Kernal32.CloseHandle(hPToken);
             }
             else if (parentProcessId != 0)
             {
@@ -197,8 +194,8 @@ namespace CreateAsUserWithSpecificParentProcess
                     {
                         Kernal32.DeleteProcThreadAttributeList(sInfoEx.lpAttributeList);
                         Marshal.FreeHGlobal(sInfoEx.lpAttributeList);
+                        Marshal.FreeHGlobal(lpValue);
                     }
-                    Marshal.FreeHGlobal(lpValue);
                     Kernal32.CloseHandle(hToken);
                 }
                 catch
