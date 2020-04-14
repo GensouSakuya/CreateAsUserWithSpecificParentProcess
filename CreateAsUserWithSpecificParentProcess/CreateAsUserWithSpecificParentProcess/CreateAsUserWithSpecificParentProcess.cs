@@ -1,6 +1,5 @@
 ﻿using System;
 using System.Diagnostics;
-using System.DirectoryServices.AccountManagement;
 using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
@@ -19,12 +18,6 @@ namespace CreateAsUserWithSpecificParentProcess
             int result = -1;
             if (GetExistSessions(new SafeHandle(IntPtr.Zero, false), out var sessions))
             {
-                var targetUserIdentity =
-                    UserPrincipal.FindByIdentity(new PrincipalContext(ContextType.Machine),
-                        IdentityType.Name, userName);
-                if (targetUserIdentity == null)
-                    return result;
-
                 foreach (WTS_SESSION_INFO info in sessions)
                 {
                     if (info.SessionId == 0)
@@ -38,7 +31,7 @@ namespace CreateAsUserWithSpecificParentProcess
                         {
                             var windowsIdentity = new WindowsIdentity(userHandle.DangerousGetHandle());
 
-                            if (windowsIdentity.Name == targetUserIdentity.Name)
+                            if (windowsIdentity.Name == userName)
                             {
                                 try
                                 {
