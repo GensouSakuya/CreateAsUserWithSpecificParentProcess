@@ -64,18 +64,26 @@
   </ItemGroup>
   <ItemGroup>
     <Compile Include="CreateAsUserWithSpecificParentProcess.cs" />
+    <Compile Include="ElevatedLevel.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
     <Compile Include="SafeHandle.cs" />
     <Compile Include="Win32\AdvApi32.cs" />
     <Compile Include="Win32\Enums\PROCESS_CREATION_FLAGS.cs" />
     <Compile Include="Win32\Enums\SECURITY_IMPERSONATION_LEVEL.cs" />
+    <Compile Include="Win32\Enums\TOKEN_INFORMATION_CLASS.cs" />
     <Compile Include="Win32\Enums\TOKEN_TYPE.cs" />
     <Compile Include="Win32\Enums\WTS_CONNECTSTATE_CLASS.cs" />
     <Compile Include="Win32\Kernal32.cs" />
+    <Compile Include="Win32\Structs\LUID.cs" />
+    <Compile Include="Win32\Structs\LUID_AND_ATTRIBUTES.cs" />
     <Compile Include="Win32\Structs\PROCESS_INFORMATION.cs" />
     <Compile Include="Win32\Structs\SECURITY_ATTRIBUTES.cs" />
+    <Compile Include="Win32\Structs\SID_AND_ATTRIBUTES.cs" />
     <Compile Include="Win32\Structs\STARTUPINFO.cs" />
     <Compile Include="Win32\Structs\STARTUPINFOEX.cs" />
+    <Compile Include="Win32\Structs\TOKEN_LINKED_TOKEN.cs" />
+    <Compile Include="Win32\Structs\TOKEN_MANDATORY_LABEL.cs" />
+    <Compile Include="Win32\Structs\TOKEN_PRIVILEGES.cs" />
     <Compile Include="Win32\Structs\WTS_SESSION_INFO.cs" />
     <Compile Include="Win32\UserEnv.cs" />
     <Compile Include="Win32\WtsApi32.cs" />

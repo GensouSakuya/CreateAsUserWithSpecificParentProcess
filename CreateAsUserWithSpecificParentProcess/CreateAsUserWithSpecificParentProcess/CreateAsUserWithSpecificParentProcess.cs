@@ -1,7 +1,7 @@
 ﻿using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
-using System.Linq;
 using System.Runtime.InteropServices;
 using System.Security.Principal;
 using CreateAsUserWithSpecificParentProcess.Win32;
@@ -13,7 +13,7 @@ namespace CreateAsUserWithSpecificParentProcess
 {
     public class CreateAsUserWithSpecificParentProcess
     {
-        public static int CreateProcess(string userName, string fileName, string args, int parentProcessId, bool waitingExitCode = false, bool elevated = false)
+        public static int CreateProcess(string userName, string fileName, string args, int parentProcessId = 0, bool waitingExitCode = false, ElevatedLevel elevatedLevel = ElevatedLevel.Normal)
         {
             int result = -1;
             if (GetExistSessions(new SafeHandle(IntPtr.Zero, false), out var sessions))
@@ -35,7 +35,7 @@ namespace CreateAsUserWithSpecificParentProcess
                             {
                                 try
                                 {
-                                    result = CreateProcess(fileName, args, info.SessionId, parentProcessId, userHandle.DangerousGetHandle(), waitingExitCode, elevated);
+                                    result = CreateProcess(fileName, args, info.SessionId, parentProcessId, userHandle.DangerousGetHandle(), waitingExitCode, elevatedLevel);
                                     break;
                                 }
                                 finally
@@ -52,9 +52,36 @@ namespace CreateAsUserWithSpecificParentProcess
             return result;
         }
 
+        public static uint FindExistSessionId()
+        {
+            if (GetExistSessions(new SafeHandle(IntPtr.Zero, false), out var sessions))
+            {
+                foreach (WTS_SESSION_INFO info in sessions)
+                {
+                    if (info.SessionId == 0)
+                    {
+                        continue;
+                    }
+
+                    return info.SessionId;
+                }
+            }
+
+            return 0;
+        }
+
+        public static WindowsIdentity GetSessionUserIdentity(uint sessionId)
+        {
+            if (WtsApi32.WTSQueryUserToken(sessionId, out SafeHandle userHandle))
+            {
+                return new WindowsIdentity(userHandle.DangerousGetHandle());
+            }
+            return null;
+        }
+
         private static bool GetExistSessions(SafeHandle handle, out WTS_SESSION_INFO[] sessions)
         {
-            IntPtr buf = IntPtr.Zero;
+            var buf = IntPtr.Zero;
 
             try
             {
@@ -62,10 +89,10 @@ namespace CreateAsUserWithSpecificParentProcess
 
                 if (result)
                 {
-                    IntPtr current = buf;
-                    int dSize = Marshal.SizeOf(new WTS_SESSION_INFO());
+                    var current = buf;
+                    var dSize = Marshal.SizeOf(new WTS_SESSION_INFO());
                     var retValue = new WTS_SESSION_INFO[count];
-                    for (int i = 0; i < count; i++)
+                    for (var i = 0; i < count; i++)
                     {
                         retValue[i] = (WTS_SESSION_INFO)Marshal.PtrToStructure(current, typeof(WTS_SESSION_INFO));
                         current += dSize;
@@ -89,7 +116,7 @@ namespace CreateAsUserWithSpecificParentProcess
             }
         }
 
-        private static int CreateProcess(string fileName, string args, uint sessionId, int parentProcessId, IntPtr hToken, bool waitingExitCode, bool elevated)
+        private static int CreateProcess(string fileName, string args, uint sessionId, int parentProcessId, IntPtr hToken, bool waitingExitCode, ElevatedLevel elevatedLevel)
         {
             var exitCode = 0;
 
@@ -116,10 +143,10 @@ namespace CreateAsUserWithSpecificParentProcess
             var lpValue = IntPtr.Zero;
 
             //will run as System
-            if (elevated)
+            if (elevatedLevel == ElevatedLevel.System)
             {
                 var hPToken = GetOpenedWinLogonToken(sessionId, out var logonPid);
-                SECURITY_ATTRIBUTES sa = new SECURITY_ATTRIBUTES();
+                var sa = new SECURITY_ATTRIBUTES();
                 sa.Length = Marshal.SizeOf(sa);
 
                 if (!AdvApi32.DuplicateTokenEx(hPToken, MAXIMUM_ALLOWED, ref sa,
@@ -129,7 +156,12 @@ namespace CreateAsUserWithSpecificParentProcess
                     ExitWithWin32Error();
                 }
             }
-            else if (parentProcessId != 0)
+            else if (elevatedLevel == ElevatedLevel.Admin)
+            {
+                hToken = ElevationPrivilege(hToken);
+            }
+
+            if (parentProcessId != 0)
             {
                 var lpSize = IntPtr.Zero;
                 var initSuccess = Kernal32.InitializeProcThreadAttributeList(IntPtr.Zero, 1, 0, ref lpSize);
@@ -179,9 +211,10 @@ namespace CreateAsUserWithSpecificParentProcess
             {
                 if (waitingExitCode)
                 {
-                    exitCode =
-                        Process.GetProcesses().FirstOrDefault(p => p.Id == tProcessInfo.dwProcessId)?.WaitForExitAsync()
-                            .Result ?? int.MinValue;
+                    var process = Process.GetProcessById(tProcessInfo.dwProcessId);
+                    exitCode = process
+                                   ?.WaitForExitAsync()
+                                   .Result ?? int.MinValue;
                 }
             }
             finally
@@ -234,5 +267,157 @@ namespace CreateAsUserWithSpecificParentProcess
         }
 
         private const uint MAXIMUM_ALLOWED = 0x2000000;
+
+        private static void SetHighIntegrityLevel(IntPtr hToken)
+        {
+            var pTokenInfo = IntPtr.Zero;
+            try
+            {
+                //S-1-16-12288 is the high integrity level sid
+                if (!AdvApi32.ConvertStringSidToSid("S-1-16-12288", out var sid))
+                {
+                    var errorCode = Marshal.GetLastWin32Error();
+                    throw new Exception("ConvertStringSidToSid:" + errorCode);
+                }
+
+                var tml = new TOKEN_MANDATORY_LABEL();
+                tml.Label.Attributes = 0x00000020;//SE_GROUP_INTEGRITY
+                tml.Label.Sid = sid;
+
+                var cbTokenInfo = Marshal.SizeOf(tml);
+                pTokenInfo = Marshal.AllocHGlobal(cbTokenInfo);
+                Marshal.StructureToPtr(tml, pTokenInfo, false);
+
+                if (!AdvApi32.SetTokenInformation(hToken, TOKEN_INFORMATION_CLASS.TokenIntegrityLevel, pTokenInfo,
+                    cbTokenInfo + AdvApi32.GetLengthSid(tml.Label.Sid)))
+                {
+                    var errorCode = Marshal.GetLastWin32Error();
+                    throw new Exception("SetTokenInformation:" + errorCode);
+                }
+            }
+            finally
+            {
+                Kernal32.CloseHandle(pTokenInfo);
+            }
+        }
+
+        //Get elevated token
+        private static IntPtr ElevationPrivilege(IntPtr hToken)
+        {
+            var pLinkedToken = IntPtr.Zero;
+            try
+            {
+                var linkedToken = new TOKEN_LINKED_TOKEN();
+
+                var length = Marshal.SizeOf(linkedToken);
+                pLinkedToken = Marshal.AllocHGlobal(length);
+                Marshal.StructureToPtr(linkedToken, pLinkedToken, false);
+                var res = AdvApi32.GetTokenInformation(hToken, TOKEN_INFORMATION_CLASS.TokenLinkedToken, pLinkedToken,
+                    length,
+                    out length);
+                if (!res)
+                {
+                    var errorCode = Marshal.GetLastWin32Error();
+                    throw new Exception("GetTokenInformation:" + errorCode);
+                }
+
+                linkedToken = (TOKEN_LINKED_TOKEN) Marshal.PtrToStructure(pLinkedToken, typeof(TOKEN_LINKED_TOKEN));
+
+                if (linkedToken.LinkedToken == IntPtr.Zero)
+                {
+                    throw new Exception("No linked token");
+                }
+
+                Kernal32.CloseHandle(hToken);
+
+                return linkedToken.LinkedToken;
+            }
+            catch
+            {
+                if (pLinkedToken != IntPtr.Zero)
+                {
+                    Kernal32.CloseHandle(pLinkedToken);
+                }
+                return hToken;
+            }
+        }
+
+        //Can only enable permissions and not add
+        private static void EnablePrivilege(IntPtr hToken)
+        {
+            var privilegeList = new List<string>
+            {
+                "SeCreateTokenPrivilege",
+                "SeAssignPrimaryTokenPrivilege",
+                "SeLockMemoryPrivilege",
+                "SeIncreaseQuotaPrivilege",
+                "SeUnsolicitedInputPrivilege",
+                "SeMachineAccountPrivilege",
+                "SeTcbPrivilege",
+                "SeSecurityPrivilege",
+                "SeTakeOwnershipPrivilege",
+                "SeLoadDriverPrivilege",
+                "SeSystemProfilePrivilege",
+                "SeSystemtimePrivilege",
+                "SeProfileSingleProcessPrivilege",
+                "SeIncreaseBasePriorityPrivilege",
+                "SeCreatePagefilePrivilege",
+                "SeCreatePermanentPrivilege",
+                "SeBackupPrivilege",
+                "SeRestorePrivilege",
+                "SeShutdownPrivilege",
+                "SeDebugPrivilege",
+                "SeAuditPrivilege",
+                "SeSystemEnvironmentPrivilege",
+                "SeChangeNotifyPrivilege",
+                "SeRemoteShutdownPrivilege",
+                "SeUndockPrivilege",
+                "SeSyncAgentPrivilege",
+                "SeEnableDelegationPrivilege",
+                "SeManageVolumePrivilege",
+                "SeImpersonatePrivilege",
+                "SeCreateGlobalPrivilege",
+                "SeTrustedCredManAccessPrivilege",
+                "SeRelabelPrivilege",
+                "SeIncreaseWorkingSetPrivilege",
+                "SeTimeZonePrivilege",
+                "SeCreateSymbolicLinkPrivilege",
+                "SeDelegateSessionUserImpersonatePrivilege"
+            };
+
+            privilegeList.ForEach(p =>
+            {
+                try
+                {
+                    SetPrivilege(hToken, p);
+                }
+                catch
+                {
+                    //ignore
+                }
+            });
+        }
+        private static void SetPrivilege(IntPtr hToken, string privilegeName)
+        {
+            var tp = new TOKEN_PRIVILEGES();
+            var luidSecurity = new LUID();
+
+            if (!(AdvApi32.LookupPrivilegeValue(null, privilegeName, ref luidSecurity)))
+            {
+                var errorCode = Marshal.GetLastWin32Error();
+                throw new Exception("LookupPrivilegeValue:" + errorCode);
+            }
+
+            tp.PrivilegeCount = 1;
+            tp.Privileges = new LUID_AND_ATTRIBUTES[1];
+            tp.Privileges[0].Luid = luidSecurity;
+            tp.Privileges[0].Attributes = 0x00000002;//SE_PRIVILEGE_ENABLED
+
+            if (!(AdvApi32.AdjustTokenPrivileges(hToken, false, ref tp, 0, IntPtr.Zero, IntPtr.Zero)))
+            {
+                var errorCode = Marshal.GetLastWin32Error();
+                throw new Exception("AdjustTokenPrivileges:" + errorCode);
+            }
+        }
     }
 }
